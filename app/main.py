@@ -41,6 +41,13 @@ async def on_startup():
     loop = asyncio.get_event_loop()
     loop.create_task(market.run_scanner(strategy, tg))
     loop.create_task(tg.heartbeat_task())
+    if settings.TELEGRAM_WEBHOOK_URL:
+        try:
+            await tg.setup_webhook()
+        except Exception as e:
+            logger.exception("Telegram webhook setup failed: %s", e)
+    else:
+        loop.create_task(tg.poll_updates())
 
 
 @app.on_event("shutdown")

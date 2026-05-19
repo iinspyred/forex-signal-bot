@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     PAIRS: List[str] = Field(["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"], env="PAIRS")
     TIMEFRAMES: List[str] = Field(["1m", "5m"], env="TIMEFRAMES")
     DATABASE_URL: str = Field("sqlite:///./data/signals.db", env="DATABASE_URL")
+    TELEGRAM_WEBHOOK_URL: str | None = Field(None, env="TELEGRAM_WEBHOOK_URL")
 
     class Config:
         env_file = ".env"

@@ -32,5 +32,10 @@ Railway deployment
 
 GitHub auto deploy
 1. Create GitHub secrets: `RAILWAY_API_KEY`, `RAILWAY_PROJECT_ID`, `RAILWAY_SERVICE_ID`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `TWELVEDATA_API_KEY`, `FINNHUB_API_KEY`.
-2. The GitHub Actions workflow at `.github/workflows/deploy.yml` will run on pushes to `main`.
-3. If Railway is connected to the repo, deployments will trigger automatically from `main`.
+2. The GitHub Actions workflow at `.github/workflows/deploy.yml` will run on pushes to `main` and `master`.
+3. If Railway is connected to the repo, deployments will trigger automatically from `main` or `master`.
+
+Telegram webhook support
+- Set `TELEGRAM_WEBHOOK_URL` to your public Railway URL plus `/telegram/webhook`.
+- Example: `https://<railway-host>/telegram/webhook`
+- If `TELEGRAM_WEBHOOK_URL` is not set, the bot falls back to long polling and still supports `/start`, `/status`, and `/help`.
