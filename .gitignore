@@ -1,18 +1,19 @@
-# Python
 __pycache__/
 *.py[cod]
 *.pyo
-*.pyd
-
-# Virtual environments
+.Python
+.env
 .venv/
 venv/
-ENV/
-.env
-
-# Logs
+env/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+pytest-cache-files-*/
+.mypy_cache/
+.ruff_cache/
 logs/
-
-# OS files
+*.log
+signals.db
 .DS_Store
-Thumbs.db

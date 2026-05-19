@@ -1,81 +1,123 @@
-from typing import List, Dict, Any
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+import logging
+
 import pandas as pd
-import numpy as np
 from ta.momentum import RSIIndicator
 from ta.trend import EMAIndicator, MACD
-from app.core.logger import logger
+from ta.volatility import AverageTrueRange
+
+from app.core.state import Signal
+
+logger = logging.getLogger(__name__)
 
 
 class StrategyEngine:
-    """Modular strategy engine implementing indicators and signal rules."""
+    def __init__(self, cooldown_minutes: int = 30) -> None:
+        self.cooldown = timedelta(minutes=cooldown_minutes)
+        self._last_signal_at: dict[tuple[str, str, str], datetime] = {}
 
-    def __init__(self):
-        self.recent_signals = {}  # prevent duplicates: (pair,tf) -> last_side
+    def analyze(self, pair: str, timeframe: str, candles: pd.DataFrame) -> Signal | None:
+        if len(candles) < 60:
+            return None
 
-    def _compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
-        # ensure monotonically increasing time index
-        df = df.copy()
-        df["rsi"] = RSIIndicator(df["close"], window=14).rsi()
-        df["ema20"] = EMAIndicator(df["close"], window=20).ema_indicator()
-        df["ema50"] = EMAIndicator(df["close"], window=50).ema_indicator()
-        macd = MACD(df["close"]) 
-        df["macd"] = macd.macd()
-        df["macd_signal"] = macd.macd_signal()
-        # volume moving average for confirmation
-        df["vol_ma20"] = df["volume"].rolling(20).mean()
-        return df
+        frame = self._with_indicators(candles)
+        latest = frame.iloc[-1]
+        previous = frame.iloc[-2]
 
-    def analyze(self, df: pd.DataFrame, pair: str, timeframe: str) -> List[Dict[str, Any]]:
-        """Analyze dataframe and return list of signals.
+        if latest[["rsi", "ema20", "ema50", "macd", "macd_signal", "atr"]].isna().any():
+            return None
 
-        Each signal is a dict: {side, entry, details}
-        """
-        if df.shape[0] < 60:
-            return []
-        df = self._compute_indicators(df)
-        last = df.iloc[-1]
-        prev = df.iloc[-2]
+        trend = "Bullish" if latest["ema20"] > latest["ema50"] else "Bearish"
+        volatility_ok = self._volatility_ok(latest)
+        volume_ok = self._volume_ok(frame)
+        bullish_cross = previous["ema20"] <= previous["ema50"] and latest["ema20"] > latest["ema50"]
+        bearish_cross = previous["ema20"] >= previous["ema50"] and latest["ema20"] < latest["ema50"]
+        macd_bullish = previous["macd"] <= previous["macd_signal"] and latest["macd"] > latest["macd_signal"]
+        macd_bearish = previous["macd"] >= previous["macd_signal"] and latest["macd"] < latest["macd_signal"]
 
-        signals = []
+        direction: str | None = None
+        strategy = ""
+        if latest["rsi"] < 30 and bullish_cross and macd_bullish and volatility_ok:
+            direction = "BUY"
+            strategy = "EMA crossover + RSI oversold + MACD bullish crossover"
+        elif latest["rsi"] > 70 and bearish_cross and macd_bearish and volatility_ok:
+            direction = "SELL"
+            strategy = "EMA crossover + RSI overbought + MACD bearish crossover"
 
-        # EMA crossover
-        ema_cross_up = prev["ema20"] < prev["ema50"] and last["ema20"] > last["ema50"]
-        ema_cross_down = prev["ema20"] > prev["ema50"] and last["ema20"] < last["ema50"]
+        if direction is None or self._is_duplicate(pair, timeframe, direction):
+            return None
 
-        # MACD crossover
-        macd_bull = prev["macd"] < prev["macd_signal"] and last["macd"] > last["macd_signal"]
-        macd_bear = prev["macd"] > prev["macd_signal"] and last["macd"] < last["macd_signal"]
+        confidence = self._confidence_score(latest, volume_ok, volatility_ok, direction)
+        self._last_signal_at[(pair, timeframe, direction)] = datetime.now(UTC)
 
-        # RSI thresholds
-        rsi = last["rsi"]
+        return Signal(
+            pair=pair,
+            timeframe=timeframe.replace("min", "m"),
+            direction=direction,
+            entry=float(latest["close"]),
+            rsi=float(latest["rsi"]),
+            trend=trend,
+            confidence=confidence,
+            strategy=strategy,
+            timestamp=datetime.now(UTC),
+            indicators={
+                "ema20": float(latest["ema20"]),
+                "ema50": float(latest["ema50"]),
+                "macd": float(latest["macd"]),
+                "macd_signal": float(latest["macd_signal"]),
+                "atr": float(latest["atr"]),
+            },
+        )
 
-        # Volume confirmation
-        vol_conf = last["volume"] > (last["vol_ma20"] if not pd.isna(last["vol_ma20"]) else 0)
+    def _with_indicators(self, candles: pd.DataFrame) -> pd.DataFrame:
+        frame = candles.copy()
+        close = frame["close"]
+        high = frame["high"]
+        low = frame["low"]
+        frame["rsi"] = RSIIndicator(close=close, window=14).rsi()
+        frame["ema20"] = EMAIndicator(close=close, window=20).ema_indicator()
+        frame["ema50"] = EMAIndicator(close=close, window=50).ema_indicator()
+        macd = MACD(close=close)
+        frame["macd"] = macd.macd()
+        frame["macd_signal"] = macd.macd_signal()
+        frame["atr"] = AverageTrueRange(high=high, low=low, close=close, window=14).average_true_range()
+        return frame
 
-        # BUY
-        if rsi < 35 and ema_cross_up and macd_bull and vol_conf:
-            side = "BUY"
-            entry = float(last["close"])
-            details = {"RSI": int(rsi), "Trend": "Bullish", "Strategy": "EMA+MACD+RSI"}
-            if self._allow_signal(pair, timeframe, side):
-                signals.append({"side": side, "entry": entry, "details": details})
+    def _is_duplicate(self, pair: str, timeframe: str, direction: str) -> bool:
+        key = (pair, timeframe, direction)
+        last_seen = self._last_signal_at.get(key)
+        return bool(last_seen and datetime.now(UTC) - last_seen < self.cooldown)
 
-        # SELL
-        if rsi > 65 and ema_cross_down and macd_bear and vol_conf:
-            side = "SELL"
-            entry = float(last["close"])
-            details = {"RSI": int(rsi), "Trend": "Bearish", "Strategy": "EMA+MACD+RSI"}
-            if self._allow_signal(pair, timeframe, side):
-                signals.append({"side": side, "entry": entry, "details": details})
+    @staticmethod
+    def _volatility_ok(latest: pd.Series) -> bool:
+        close = float(latest["close"])
+        atr = float(latest["atr"])
+        return close > 0 and 0.00005 <= atr / close <= 0.02
 
-        return signals
+    @staticmethod
+    def _volume_ok(frame: pd.DataFrame) -> bool:
+        if "volume" not in frame or frame["volume"].sum() <= 0:
+            return True
+        recent_volume = float(frame["volume"].tail(5).mean())
+        baseline = float(frame["volume"].tail(30).mean())
+        return baseline <= 0 or recent_volume >= baseline * 0.8
 
-    def _allow_signal(self, pair: str, timeframe: str, side: str) -> bool:
-        key = f"{pair}:{timeframe}"
-        last = self.recent_signals.get(key)
-        if last == side:
-            # prevent duplicate consecutive signal
-            logger.debug("Duplicate signal suppressed for %s %s", pair, timeframe)
-            return False
-        self.recent_signals[key] = side
-        return True
+    @staticmethod
+    def _confidence_score(latest: pd.Series, volume_ok: bool, volatility_ok: bool, direction: str) -> float:
+        rsi = float(latest["rsi"])
+        macd_gap = abs(float(latest["macd"]) - float(latest["macd_signal"]))
+        ema_gap = abs(float(latest["ema20"]) - float(latest["ema50"]))
+        score = 50.0
+        score += min(20.0, macd_gap * 100_000)
+        score += min(15.0, ema_gap * 100_000)
+        if direction == "BUY":
+            score += min(10.0, max(0.0, 30.0 - rsi))
+        else:
+            score += min(10.0, max(0.0, rsi - 70.0))
+        if volume_ok:
+            score += 5.0
+        if volatility_ok:
+            score += 5.0
+        return round(min(score, 99.0), 2)

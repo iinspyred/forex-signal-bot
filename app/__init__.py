@@ -1,1 +1,1 @@
-# app package marker
+"""AI-powered forex signal bot application."""
