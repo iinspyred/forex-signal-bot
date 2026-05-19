@@ -33,8 +33,6 @@ async def stats():
 
 @router.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    if not settings.TELEGRAM_WEBHOOK_URL:
-        raise HTTPException(status_code=400, detail="Telegram webhook is not configured")
     payload = await request.json()
     tg = TelegramService()
     try:

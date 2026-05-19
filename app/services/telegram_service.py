@@ -38,15 +38,19 @@ class TelegramService:
         )
         await self.send_message(text)
 
-    async def setup_webhook(self) -> None:
+    async def setup_webhook(self) -> bool:
         if settings.TELEGRAM_WEBHOOK_URL:
             try:
-                await self.bot.set_webhook(settings.TELEGRAM_WEBHOOK_URL)
-                logger.info("Telegram webhook set to %s", settings.TELEGRAM_WEBHOOK_URL)
+                result = await self.bot.set_webhook(settings.TELEGRAM_WEBHOOK_URL)
+                if result:
+                    logger.info("Telegram webhook set to %s", settings.TELEGRAM_WEBHOOK_URL)
+                    return True
+                logger.warning("Telegram webhook setup returned false")
             except TelegramError:
                 logger.exception("Failed to set Telegram webhook")
-        else:
-            logger.info("No Telegram webhook URL configured; falling back to polling")
+            return False
+        logger.info("No Telegram webhook URL configured; falling back to polling")
+        return False
 
     async def poll_updates(self) -> None:
         logger.info("Starting Telegram polling listener")
@@ -62,6 +66,7 @@ class TelegramService:
 
     async def handle_webhook(self, payload: dict[str, Any]) -> None:
         try:
+            logger.debug("Received Telegram webhook payload: %s", payload)
             update = Update.de_json(payload, self.bot)
             await self._process_update(update)
         except Exception:

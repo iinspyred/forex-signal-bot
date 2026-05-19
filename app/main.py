@@ -43,9 +43,13 @@ async def on_startup():
     loop.create_task(tg.heartbeat_task())
     if settings.TELEGRAM_WEBHOOK_URL:
         try:
-            await tg.setup_webhook()
+            success = await tg.setup_webhook()
+            if not success:
+                logger.warning("Telegram webhook setup failed; starting polling fallback")
+                loop.create_task(tg.poll_updates())
         except Exception as e:
             logger.exception("Telegram webhook setup failed: %s", e)
+            loop.create_task(tg.poll_updates())
     else:
         loop.create_task(tg.poll_updates())
 
